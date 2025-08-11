@@ -93,6 +93,18 @@
       Number(m[5])
     );
   }
+  function parseLLMTime(s) {
+    if (!s) return null;
+    // Handle format like "20250513T000000+0800"
+    const match = s.match(
+      /(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})([+-]\d{4})/
+    );
+    if (!match) return null;
+
+    const [_, year, month, day, hour, minute, second, timezone] = match;
+    const dateStr = `${year}-${month}-${day}T${hour}:${minute}:${second}${timezone}`;
+    return new Date(dateStr);
+  }
   function escapeICSText(s) {
     if (!s) return "";
     return String(s)
@@ -194,9 +206,19 @@
 
   // 修改 createUIElements 函数
   function createUIElements() {
-    if (!isAllowedPage()) return; // 如果当前页面不在白名单中，则不创建浮标
+    // Ensure toastRoot is always created
+    if (!document.getElementById("sr-toast-root")) {
+      injectStyles();
+      const toastRoot = document.createElement("div");
+      toastRoot.id = "sr-toast-root";
+      toastRoot.className = "sr-toast-root";
+      document.body.appendChild(toastRoot);
+    }
+
+    // Restrict the floating button to allowed pages
+    if (!isAllowedPage()) return;
     if (document.getElementById("sr-gear-btn")) return;
-    injectStyles();
+
     const btn = document.createElement("div");
     btn.id = "sr-gear-btn";
     btn.title = "打开 SJTU Radicale 同步设置 (Ctrl/Cmd+Shift+R)";
@@ -209,11 +231,6 @@
       toggleSettingsModal(true);
     });
     document.body.appendChild(btn);
-
-    const toastRoot = document.createElement("div");
-    toastRoot.id = "sr-toast-root";
-    toastRoot.className = "sr-toast-root";
-    document.body.appendChild(toastRoot);
   }
 
   function showToast(text, severity = "info", ttl = 6000) {
@@ -440,16 +457,26 @@
     lines.push(`X-WR-TIMEZONE:UTC`);
     for (const ev of events) {
       try {
+        // Validate required fields
+        if (!ev.startTime || !ev.endTime || !ev.title) {
+          console.error("Invalid event data:", ev);
+          continue; // Skip invalid events
+        }
+
         lines.push("BEGIN:VEVENT");
         const uid =
           ev.eventId || ev.id || "evt-" + Math.random().toString(36).slice(2);
         lines.push(`UID:${uid}`);
         lines.push(`DTSTAMP:${isoToICSTime(now)}`);
-        const s = parseSJTUTime(ev.startTime);
-        const e = parseSJTUTime(ev.endTime);
+        
+        const s = ev.startTime instanceof Date ? ev.startTime : parseSJTUTime(ev.startTime);
+        const e = ev.endTime instanceof Date ? ev.endTime : parseSJTUTime(ev.endTime);
         if (s && e) {
           lines.push(`DTSTART:${isoToICSTime(s)}`);
           lines.push(`DTEND:${isoToICSTime(e)}`);
+        } else {
+          console.error("Invalid start or end time:", ev);
+          continue; // Skip events with invalid times
         }
         lines.push(`SUMMARY:${escapeICSText(ev.title || ev.summary || "")}`);
         if (ev.location) lines.push(`LOCATION:${escapeICSText(ev.location)}`);
@@ -583,91 +610,19 @@
   }
 
   // -----------------------------
-  // CONTEXT MENU / LLM PARSING (unchanged)
+  // CONTEXT MENU / LLM PARSING (updated)
   // -----------------------------
-  function setupContextMenu() {
-    document.addEventListener("contextmenu", (e) => {
-      const sel = window.getSelection().toString().trim();
-      if (!sel) return;
-
-      const existing = document.getElementById("sjtu-ctx-menu");
-      if (existing) existing.remove();
-
-      const menu = document.createElement("div");
-      menu.id = "sjtu-ctx-menu";
-      Object.assign(menu.style, {
-        position: "absolute",
-        left: `${e.pageX}px`,
-        top: `${e.pageY}px`,
-        zIndex: 2147483647,
-        background: "#fff",
-        border: "1px solid #e6e9ef",
-        padding: "6px",
-        borderRadius: "8px",
-        boxShadow: "0 12px 30px rgba(9,30,66,0.12)",
-      });
-
-      const btn = document.createElement("button");
-      btn.textContent = "解析并上传为日程";
-      Object.assign(btn.style, {
-        padding: "8px 10px",
-        cursor: "pointer",
-        background: "#0b74de",
-        color: "#fff",
-        border: "none",
-        borderRadius: "6px",
-      });
-
-      btn.addEventListener("click", async (ev) => {
-        ev.stopPropagation();
-        ev.preventDefault();
-        menu.remove();
-        showToast("调用大模型解析文本...");
-        try {
-          const parsed = await parseSelectedTextWithLLM(sel);
-          if (!parsed || !parsed.events || !parsed.events.length) {
-            showToast("解析未返回可用事件", "error");
-            return;
-          }
-          const profile = await getProfile();
-          if (!profile || !profile.data || !profile.data.account) {
-            showToast("未登录，无法上传", "error");
-            return;
-          }
-          // const account = profile.data.account;
-          const ics = buildICS(parsed.events, "LLM-Parsed");
-          await uploadToRadicale(ics, "LLM-Parsed");
-        } catch (err) {
-          console.error(err);
-          showToast(`解析/上传失败: ${err.message || err}`, "error");
-        }
-      });
-
-      menu.appendChild(btn);
-      document.body.appendChild(menu);
-
-      // Prevent the native context menu from hiding the custom menu
-      e.preventDefault();
-
-      // Remove the custom menu when clicking elsewhere
-      document.addEventListener(
-        "click",
-        () => {
-          const m = document.getElementById("sjtu-ctx-menu");
-          if (m) m.remove();
-        },
-        { once: true }
-      );
-    });
-  }
-
   async function parseSelectedTextWithLLM(text) {
     const url = "https://open.bigmodel.cn/api/llm-application/open/v3/application/invoke";
     const key = (await storage.get("llmApiKey")) || "";
     if (!key) {
-      console.error("LLM API Key is not configured.");
+      showToast("未配置 LLM API Key", "error");
       throw new Error("未配置 LLM API Key");
     }
+
+    const now = new Date();
+    const todayDate = now.toISOString().split("T")[0];
+    const currentTime = now.toTimeString().split(" ")[0];
 
     const agentId = "1954810625930809344"; // Replace with your agent ID
     const headers = {
@@ -682,7 +637,7 @@
           content: [
             {
               type: "input",
-              value: text,
+              value: `今天的日期是 ${todayDate}，当前时间是 ${currentTime}。\n\n请解析以下文本为日程:\n${text}`,
             },
           ],
         },
@@ -690,57 +645,142 @@
       stream: false,
     });
 
-    console.log("Sending request to LLM API...");
-    console.log("URL:", url);
-    console.log("Headers:", headers);
-    console.log("Body:", body);
+    showToast("调用大模型解析文本中...", "info");
 
     try {
       const resp = await gmHttp({ url, method: "POST", headers, data: body });
-      console.log("Received response from LLM API:", resp);
-
       if (!resp.ok) {
-        console.error("LLM API request failed with status:", resp.status);
+        showToast(`LLM 请求失败: HTTP ${resp.status}`, "error");
         throw new Error("LLM 请求失败: " + resp.status);
       }
 
       let responseJson;
       try {
         responseJson = JSON.parse(resp.responseText);
-        console.log("Parsed response JSON:", responseJson);
       } catch (e) {
-        console.error("Error parsing LLM API response content:", e.message);
+        showToast("无法解析大模型返回内容", "error");
         throw new Error("无法解析大模型返回内容: " + e.message);
       }
 
-      // Extract the content from the response
       const content = responseJson.choices?.[0]?.messages?.content?.msg;
       if (!content) {
-        console.error("No valid content returned by LLM API.");
+        showToast("大模型未返回有效内容", "error");
         throw new Error("未返回有效内容");
       }
 
       let parsed;
       try {
         parsed = JSON.parse(content);
-        console.log("Parsed events from LLM API content:", parsed);
       } catch (e) {
-        console.error("Error parsing events content:", e.message);
+        showToast("无法解析大模型返回的事件内容", "error");
         throw new Error("无法解析大模型返回的事件内容: " + e.message);
       }
 
-      if (parsed && parsed.events) {
-        console.log("Successfully parsed events:", parsed.events);
-        return parsed;
-      } else {
-        console.error("LLM API response does not contain 'events' field.");
-        throw new Error("LLM 未返回 events 字段");
+      if (!parsed || !parsed.events || !Array.isArray(parsed.events)) {
+        showToast("大模型返回的事件结构无效", "error");
+        throw new Error("LLM 返回的事件结构无效");
       }
+
+      for (const event of parsed.events) {
+        if (!event.startTime || !event.endTime || !event.title) {
+          showToast("解析的事件缺少必要字段", "error");
+          throw new Error("解析的事件缺少必要字段");
+        }
+      }
+
+      showToast(`成功解析 ${parsed.events.length} 个事件`, "info");
+      return parsed;
     } catch (err) {
-      console.error("Error during LLM API call:", err.message);
+      showToast(`解析失败: ${err.message || err}`, "error");
       throw err;
     }
   }
+
+  async function handleLLMParsingAndUpload(selectedText) {
+    try {
+      const parsed = await parseSelectedTextWithLLM(selectedText);
+      if (!parsed || !parsed.events || !parsed.events.length) {
+        showToast("解析未返回可用事件", "error");
+        return;
+      }
+
+      const profile = await getProfile();
+      if (!profile || !profile.data || !profile.data.account) {
+        showToast("未登录，无法上传", "error");
+        return;
+      }
+
+      const events = parsed.events.map((event) => ({
+        ...event,
+        startTime: parseLLMTime(event.startTime),
+        endTime: parseLLMTime(event.endTime),
+      }));
+      const ics = buildICS(events, "LLM-Parsed");
+      const uploadResult = await uploadToRadicale(ics, "LLM-Parsed");
+
+      if (uploadResult && uploadResult.ok) {
+        showToast(`上传成功: ${events.length} 个事件\n路径: ${uploadResult.url}`, "info");
+      }
+    } catch (err) {
+      showToast(`解析/上传失败: ${err.message || err}`, "error");
+    }
+  }
+
+  document.addEventListener("contextmenu", (e) => {
+    const sel = window.getSelection().toString().trim();
+    if (!sel) return;
+
+    const existing = document.getElementById("sjtu-ctx-menu");
+    if (existing) existing.remove();
+
+    const menu = document.createElement("div");
+    menu.id = "sjtu-ctx-menu";
+    Object.assign(menu.style, {
+      position: "absolute",
+      left: `${e.pageX}px`,
+      top: `${e.pageY}px`,
+      zIndex: 2147483647,
+      background: "#fff",
+      border: "1px solid #e6e9ef",
+      padding: "6px",
+      borderRadius: "8px",
+      boxShadow: "0 12px 30px rgba(9,30,66,0.12)",
+    });
+
+    const btn = document.createElement("button");
+    btn.textContent = "解析并上传为日程";
+    Object.assign(btn.style, {
+      padding: "8px 10px",
+      cursor: "pointer",
+      background: "#0b74de",
+      color: "#fff",
+      border: "none",
+      borderRadius: "6px",
+    });
+
+    btn.addEventListener("click", async (ev) => {
+      ev.stopPropagation();
+      ev.preventDefault();
+      menu.remove();
+      await handleLLMParsingAndUpload(sel);
+    });
+
+    menu.appendChild(btn);
+    document.body.appendChild(menu);
+
+    // Prevent the native context menu from hiding the custom menu
+    e.preventDefault();
+
+    // Remove the custom menu when clicking elsewhere
+    document.addEventListener(
+      "click",
+      () => {
+        const m = document.getElementById("sjtu-ctx-menu");
+        if (m) m.remove();
+      },
+      { once: true }
+    );
+  });
 
   // -----------------------------
   // BOOTSTRAP: create UI after DOM ready + add keyboard shortcut
