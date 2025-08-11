@@ -593,14 +593,16 @@
     document.addEventListener("contextmenu", (e) => {
       const sel = window.getSelection().toString().trim();
       if (!sel) return;
+
       const existing = document.getElementById("sjtu-ctx-menu");
       if (existing) existing.remove();
+
       const menu = document.createElement("div");
       menu.id = "sjtu-ctx-menu";
       Object.assign(menu.style, {
-        position: "fixed",
-        left: e.clientX + "px",
-        top: e.clientY + "px",
+        position: "absolute",
+        left: `${e.pageX}px`,
+        top: `${e.pageY}px`,
         zIndex: 2147483647,
         background: "#fff",
         border: "1px solid #e6e9ef",
@@ -608,6 +610,7 @@
         borderRadius: "8px",
         boxShadow: "0 12px 30px rgba(9,30,66,0.12)",
       });
+
       const btn = document.createElement("button");
       btn.textContent = "解析并上传为日程";
       Object.assign(btn.style, {
@@ -618,6 +621,7 @@
         border: "none",
         borderRadius: "6px",
       });
+
       btn.addEventListener("click", async (ev) => {
         ev.stopPropagation();
         ev.preventDefault();
@@ -641,53 +645,104 @@
           showToast("解析/上传失败: " + (err.message || err), "error");
         }
       });
+
       menu.appendChild(btn);
       document.body.appendChild(menu);
-      setTimeout(() => {
-        menu.remove();
-      }, 5000);
-    });
-    document.addEventListener("click", () => {
-      const m = document.getElementById("sjtu-ctx-menu");
-      if (m) m.remove();
+
+      // Prevent the native context menu from hiding the custom menu
+      e.preventDefault();
+
+      // Remove the custom menu when clicking elsewhere
+      document.addEventListener(
+        "click",
+        () => {
+          const m = document.getElementById("sjtu-ctx-menu");
+          if (m) m.remove();
+        },
+        { once: true }
+      );
     });
   }
 
   async function parseSelectedTextWithLLM(text) {
-    const url = (await storage.get("llmApiUrl")) || "";
+    const url = "https://open.bigmodel.cn/api/llm-application/open/v3/application/invoke";
     const key = (await storage.get("llmApiKey")) || "";
-    if (!url) throw new Error("未配置 LLM API URL");
-    const prompt = `请把下面的非结构化文本解析为 JSON 数组 events，数组元素包含字段：title, startTime (格式 YYYY-MM-DD HH:MM), endTime (格式 YYYY-MM-DD HH:MM), location (可选), status (可选)。输出仅为 JSON 对象：{ "events": [ ... ] }。文本：\n\n${text}`;
-    const headers = { "Content-Type": "application/json" };
-    if (key) headers["Authorization"] = key;
-    const body = JSON.stringify({ prompt, max_tokens: 800 });
-    const resp = await gmHttp({ url, method: "POST", headers, data: body });
-    if (!resp.ok) throw new Error("LLM 请求失败: " + resp.status);
-    let parsed;
+    if (!key) {
+      console.error("LLM API Key is not configured.");
+      throw new Error("未配置 LLM API Key");
+    }
+
+    const agentId = "1954810625930809344"; // Replace with your agent ID
+    const headers = {
+      "Authorization": `Bearer ${key}`,
+      "Content-Type": "application/json",
+    };
+    const body = JSON.stringify({
+      app_id: agentId,
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: text,
+            },
+          ],
+        },
+      ],
+    });
+
+    console.log("Sending request to LLM API...");
+    console.log("URL:", url);
+    console.log("Headers:", headers);
+    console.log("Body:", body);
+
     try {
-      parsed = JSON.parse(resp.responseText);
-    } catch (e) {
-      try {
-        const alt = JSON.parse(
-          resp.responseText
-            .trim()
-            .replace(/^[^\{]+/, "")
-            .replace(/[^\}]+$/, "")
-        );
-        parsed = alt;
-      } catch (e2) {
-        const j = resp.responseText.match(/\{[\s\S]*\}/);
-        if (j) parsed = JSON.parse(j[0]);
-        else throw new Error("无法解析大模型返回内容");
+      const resp = await gmHttp({ url, method: "POST", headers, data: body });
+      console.log("Received response from LLM API:", resp);
+
+      if (!resp.ok) {
+        console.error("LLM API request failed with status:", resp.status);
+        throw new Error("LLM 请求失败: " + resp.status);
       }
+
+      let responseJson;
+      try {
+        responseJson = JSON.parse(resp.responseText);
+        console.log("Parsed response JSON:", responseJson);
+      } catch (e) {
+        console.error("Error parsing LLM API response content:", e.message);
+        throw new Error("无法解析大模型返回内容: " + e.message);
+      }
+
+      // Handle specific error case: insufficient balance or resources
+      if (responseJson.status === "failed" && responseJson.error) {
+        const errorMessage = responseJson.error.message || "未知错误";
+        console.error("LLM API returned an error:", errorMessage);
+        showToast(`大模型调用失败: ${errorMessage}`, "error");
+        throw new Error(`大模型调用失败: ${errorMessage}`);
+      }
+
+      const content = responseJson.choices?.[0]?.messages?.[0]?.content;
+      if (!content) {
+        console.error("No valid content returned by LLM API.");
+        throw new Error("未返回有效内容");
+      }
+
+      const parsed = JSON.parse(content);
+      console.log("Parsed events from LLM API content:", parsed);
+
+      if (parsed && parsed.events) {
+        console.log("Successfully parsed events:", parsed.events);
+        return parsed;
+      } else {
+        console.error("LLM API response does not contain 'events' field.");
+        throw new Error("LLM 未返回 events 字段");
+      }
+    } catch (err) {
+      console.error("Error during LLM API call:", err.message);
+      throw err;
     }
-    if (parsed && parsed.events) return parsed;
-    if (parsed.choices && parsed.choices[0] && parsed.choices[0].text) {
-      const t = parsed.choices[0].text;
-      const j = t.match(/\{[\s\S]*\}/);
-      if (j) return JSON.parse(j[0]);
-    }
-    throw new Error("LLM 未返回 events 字段");
   }
 
   // -----------------------------
