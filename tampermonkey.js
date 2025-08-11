@@ -464,33 +464,29 @@
     return lines.join("\r\n");
   }
 
-  async function uploadToRadicale(ics, account) {
+  async function uploadToRadicale(ics, calendarName = "SJTU") {
     const base = (await storage.get("radicalBase")) || DEFAULTS.radicalBase;
     const user =
       (await storage.get("radicalUsername")) || DEFAULTS.radicalUsername;
     const auth = (await storage.get("radicalAuth")) || "";
     const baseUrl = base.replace(/\/$/, "");
-    const filename = `SJTU-${account}.ics`;
-    const url = `${baseUrl}/${encodeURIComponent(user)}/${encodeURIComponent(
-      filename
-    )}`;
+    const url = `${baseUrl}/${encodeURIComponent(user)}/${encodeURIComponent(calendarName)}.ics`;
     const headers = { "Content-Type": "text/calendar; charset=utf-8" };
     if (auth) headers["Authorization"] = auth;
     try {
       const resp = await gmHttp({ url, method: "PUT", headers, data: ics });
       if (resp.status === 201 || resp.status === 200 || resp.status === 204) {
-        await storage.set("lastSync", Date.now());
-        showToast("同步成功: " + url);
+        showToast(`同步成功: ${url}`);
         return { ok: true, url };
       } else if (resp.status === 401 || resp.status === 403) {
         throw new Error("鉴权失败（401/403）");
       } else {
         throw new Error(
-          "上传失败，HTTP " + resp.status + " " + (resp.responseText || "")
+          `上传失败，HTTP ${resp.status} ${resp.responseText || ""}`
         );
       }
     } catch (err) {
-      throw new Error("上传失败: " + (err.message || err));
+      throw new Error(`上传失败: ${err.message || err}`);
     }
   }
 
@@ -515,7 +511,7 @@
     const events = (eventsResp.data && eventsResp.data.events) || [];
     const ics = buildICS(events, `SJTU-${account}`);
     try {
-      const res = await uploadToRadicale(ics, account);
+      const res = await uploadToRadicale(ics, `SJTU-${account}`);
       if (res && res.ok) showToast("上传到 Radicale: " + res.url);
     } catch (err) {
       showToast(err.message || String(err), "error");
@@ -638,11 +634,12 @@
             showToast("未登录，无法上传", "error");
             return;
           }
-          const ics = buildICS(parsed.events, `SJTU-${profile.data.account}`);
-          await uploadToRadicale(ics, profile.data.account);
+          // const account = profile.data.account;
+          const ics = buildICS(parsed.events, "LLM-Parsed");
+          await uploadToRadicale(ics, "LLM-Parsed");
         } catch (err) {
           console.error(err);
-          showToast("解析/上传失败: " + (err.message || err), "error");
+          showToast(`解析/上传失败: ${err.message || err}`, "error");
         }
       });
 
@@ -684,12 +681,13 @@
           role: "user",
           content: [
             {
-              type: "text",
-              text: text,
+              type: "input",
+              value: text,
             },
           ],
         },
       ],
+      stream: false,
     });
 
     console.log("Sending request to LLM API...");
@@ -715,22 +713,21 @@
         throw new Error("无法解析大模型返回内容: " + e.message);
       }
 
-      // Handle specific error case: insufficient balance or resources
-      if (responseJson.status === "failed" && responseJson.error) {
-        const errorMessage = responseJson.error.message || "未知错误";
-        console.error("LLM API returned an error:", errorMessage);
-        showToast(`大模型调用失败: ${errorMessage}`, "error");
-        throw new Error(`大模型调用失败: ${errorMessage}`);
-      }
-
-      const content = responseJson.choices?.[0]?.messages?.[0]?.content;
+      // Extract the content from the response
+      const content = responseJson.choices?.[0]?.messages?.content?.msg;
       if (!content) {
         console.error("No valid content returned by LLM API.");
         throw new Error("未返回有效内容");
       }
 
-      const parsed = JSON.parse(content);
-      console.log("Parsed events from LLM API content:", parsed);
+      let parsed;
+      try {
+        parsed = JSON.parse(content);
+        console.log("Parsed events from LLM API content:", parsed);
+      } catch (e) {
+        console.error("Error parsing events content:", e.message);
+        throw new Error("无法解析大模型返回的事件内容: " + e.message);
+      }
 
       if (parsed && parsed.events) {
         console.log("Successfully parsed events:", parsed.events);
