@@ -704,11 +704,11 @@
         return;
       }
 
-      const profile = await getProfile();
-      if (!profile || !profile.data || !profile.data.account) {
-        showToast("未登录，无法上传", "error");
-        return;
-      }
+      // const profile = await getProfile();
+      // if (!profile || !profile.data || !profile.data.account) {
+      //   showToast("未登录，无法上传", "error");
+      //   return;
+      // }
 
       const events = parsed.events.map((event) => ({
         ...event,
