@@ -167,3 +167,47 @@ async function buildSettingsModal() {
     if (typeof manualSyncHandler === "function") manualSyncHandler();
   });
 }
+
+// Add: generic text-input modal for LLM parsing
+export function showTextInputModal({ title = "输入要解析的日程文本", initial = "", placeholder = "例如：明天下午3点-5点在创业大楼开产品评审会", onSubmit }) {
+  injectStyles();
+  const existing = document.getElementById("sr-input-modal");
+  if (existing) existing.remove();
+
+  const backdrop = document.createElement("div");
+  backdrop.className = "sr-modal-backdrop";
+  backdrop.id = "sr-input-modal";
+  backdrop.addEventListener("click", (e) => { if (e.target === backdrop) backdrop.remove(); });
+
+  const panel = document.createElement("div");
+  panel.className = "sr-panel";
+  panel.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+      <h2>${escapeHTML(title)}</h2>
+      <div><button id="sr-input-cancel" class="sr-btn ghost">取消</button></div>
+    </div>
+    <div>
+      <textarea id="sr-input-text" rows="8" style="width:100%;resize:vertical;padding:10px;border-radius:10px;border:1px solid #e6e9ef;" placeholder="${escapeHTML(placeholder)}"></textarea>
+    </div>
+    <div class="sr-actions">
+      <button id="sr-input-submit" class="sr-btn primary">解析并上传</button>
+    </div>
+  `;
+  backdrop.appendChild(panel);
+  document.body.appendChild(backdrop);
+
+  const ta = panel.querySelector("#sr-input-text");
+  ta.value = initial || "";
+
+  panel.querySelector("#sr-input-cancel").addEventListener("click", () => backdrop.remove());
+  const submit = () => {
+    const val = (ta.value || "").trim();
+    if (!val) { showToast("请输入要解析的文本", "error"); return; }
+    try { onSubmit && onSubmit(val); } finally { backdrop.remove(); }
+  };
+  panel.querySelector("#sr-input-submit").addEventListener("click", submit);
+  ta.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "enter") submit();
+    if (e.key === "Escape") backdrop.remove();
+  });
+}
