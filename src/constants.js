@@ -1,4 +1,4 @@
-export const VERSION = "0.9.1";
+export const VERSION = "1.0";
 
 export const DEFAULTS = {
   radicalBase: "http://127.0.0.1:5232",

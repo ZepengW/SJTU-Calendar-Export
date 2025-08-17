@@ -1,9 +1,9 @@
 import { handleLLMParsingAndUpload } from "./llm.js";
+import { showTextInputModal } from "./ui.js";
 
 export function setupContextMenu() {
   document.addEventListener("contextmenu", (e) => {
     const sel = window.getSelection().toString().trim();
-    if (!sel) return;
 
     const existing = document.getElementById("sjtu-ctx-menu");
     if (existing) existing.remove();
@@ -23,19 +23,26 @@ export function setupContextMenu() {
     });
 
     const btn = document.createElement("button");
-    btn.textContent = "解析并上传为日程";
+    btn.textContent = "日程解析并同步";
     Object.assign(btn.style, {
       padding: "8px 10px",
       cursor: "pointer",
       background: "#0b74de",
       color: "#fff",
       border: "none",
-      borderRadius: "6px"
+      borderRadius: "6px",
+      whiteSpace: "nowrap"
     });
     btn.addEventListener("click", async (ev) => {
       ev.stopPropagation(); ev.preventDefault();
       menu.remove();
-      await handleLLMParsingAndUpload(sel);
+      showTextInputModal({
+        title: "输入要解析的日程文本",
+        initial: sel || "",
+        onSubmit: async (text) => {
+          await handleLLMParsingAndUpload(text);
+        }
+      });
     });
 
     menu.appendChild(btn);
