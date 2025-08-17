@@ -55,6 +55,67 @@ export function buildICS(events, calendarName = "SJTU") {
   return lines.join("\r\n");
 }
 
+function parseICSEventsByUID(icsText) {
+  const map = new Map();
+  if (!icsText || typeof icsText !== "string") return map;
+  // unfold folded lines per RFC 5545: lines beginning with space/tab are continuations
+  const unfolded = icsText.replace(/\r?\n[ \t]/g, "");
+  const lines = unfolded.split(/\r?\n/);
+
+  let inEvent = false;
+  let buf = [];
+  let uid = null;
+
+  for (const line of lines) {
+    if (line === "BEGIN:VEVENT") {
+      inEvent = true;
+      buf = ["BEGIN:VEVENT"];
+      uid = null;
+      continue;
+    }
+    if (line === "END:VEVENT") {
+      buf.push("END:VEVENT");
+      if (uid) {
+        map.set(uid, buf.join("\r\n"));
+      }
+      inEvent = false;
+      buf = [];
+      uid = null;
+      continue;
+    }
+    if (inEvent) {
+      buf.push(line);
+      if (!uid && /^UID[:;]/i.test(line)) {
+        const idx = line.indexOf(":");
+        if (idx >= 0) uid = line.slice(idx + 1).trim();
+      }
+    }
+  }
+  return map;
+}
+
+function mergeICSByUID(existingICS, newICS, calendarName = "SJTU") {
+  const oldMap = parseICSEventsByUID(existingICS);
+  const newMap = parseICSEventsByUID(newICS);
+  for (const [uid, block] of newMap.entries()) {
+    oldMap.set(uid, block); // new overwrites old on same UID
+  }
+
+  const lines = [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//SJTU-Radicale-Sync//EN",
+    `X-WR-CALNAME:${escapeICSText(calendarName)}`,
+    "X-WR-TIMEZONE:UTC"
+  ];
+  // stable order by UID for deterministic output
+  for (const [, block] of Array.from(oldMap.entries()).sort((a, b) => a[0].localeCompare(b[0]))) {
+    lines.push(block);
+  }
+  lines.push("END:VCALENDAR");
+  return lines.join("\r\n");
+}
+
 export async function uploadToRadicale(ics, calendarName = "SJTU") {
   const base = storage.get("radicalBase") || DEFAULTS.radicalBase;
   const user = storage.get("radicalUsername") || DEFAULTS.radicalUsername;
@@ -64,7 +125,24 @@ export async function uploadToRadicale(ics, calendarName = "SJTU") {
   const headers = { "Content-Type": "text/calendar; charset=utf-8" };
   if (auth) headers["Authorization"] = auth;
 
-  const resp = await gmHttp({ url, method: "PUT", headers, data: ics });
+  // Try incremental: fetch existing ICS, merge by UID, then PUT
+  let finalIcs = ics;
+  try {
+    const getHeaders = {};
+    if (auth) getHeaders["Authorization"] = auth;
+    const getResp = await gmHttp({ url, method: "GET", headers: getHeaders });
+    if (getResp.status === 200 && typeof getResp.responseText === "string" && getResp.responseText.startsWith("BEGIN:VCALENDAR")) {
+      finalIcs = mergeICSByUID(getResp.responseText, ics, calendarName);
+    } else if (getResp.status === 404) {
+      // no existing file, keep finalIcs = ics
+    } else if (!getResp.ok) {
+      console.warn("GET existing ICS failed, fallback to full upload:", getResp.status);
+    }
+  } catch (e) {
+    console.warn("GET existing ICS threw, fallback to full upload:", e);
+  }
+
+  const resp = await gmHttp({ url, method: "PUT", headers, data: finalIcs });
   if (resp.status === 200 || resp.status === 201 || resp.status === 204) {
     storage.set("lastSync", Date.now());
     showToast(`同步成功: ${url}`);
