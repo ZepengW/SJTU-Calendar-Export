@@ -122,9 +122,15 @@ async function buildSettingsModal() {
     </div>
     <hr style="border:none;border-top:1px solid #eef2ff;margin:12px 0">
     <h3 style="margin:0 0 6px 0">选中解析（右键） - 大模型解析</h3>
-    <p style="margin:0 0 8px 0;color:#666;font-size:13px">选中文本后可右键解析为日程。请配置 LLM API。</p>
-    <label style="display:block">LLM API URL<input id="llm-url" type="text" placeholder="https://open.bigmodel.cn/api/llm-application/open/v3/application/invoke"></label>
-    <label style="display:block;margin-top:6px">LLM API Key / Token<input id="llm-key" type="text"></label>
+    <p style="margin:0 0 8px 0;color:#666;font-size:13px">配置解析服务类型与其参数。</p>
+    <div class="sr-row">
+      <label>解析服务类型
+        <select id="llm-provider" style="padding:8px 10px;border-radius:8px;border:1px solid #e6e9ef;">
+          <option value="zhipu_agent">智谱智能体</option>
+        </select>
+      </label>
+    </div>
+    <div id="llm-provider-config"></div>
     <div class="sr-actions">
       <button id="save-settings" class="sr-btn primary">保存并关闭</button>
       <button id="sync-now" class="sr-btn">立即同步</button>
@@ -141,8 +147,32 @@ async function buildSettingsModal() {
   document.getElementById("auto-mins").value = storage.get("autoSyncMinutes") || DEFAULTS.autoSyncMinutes;
   document.getElementById("win-days").value = storage.get("dateWindowDays") || DEFAULTS.dateWindowDays;
   document.getElementById("enable-notif").checked = !!storage.get("enableNotifications");
-  document.getElementById("llm-url").value = storage.get("llmApiUrl") || "";
-  document.getElementById("llm-key").value = storage.get("llmApiKey") || "";
+  const providerSelect = document.getElementById("llm-provider");
+  providerSelect.value = storage.get("llmProvider") || "zhipu_agent";
+
+  function renderLLMProviderConfig() {
+    const prov = providerSelect.value;
+    const wrap = document.getElementById("llm-provider-config");
+    if (!wrap) return;
+    if (prov === "zhipu_agent") {
+      const currentUrl = storage.get("llmApiUrl") || "https://open.bigmodel.cn/api/llm-application/open/v3/application/invoke";
+      const currentKey = storage.get("llmApiKey") || "";
+      const currentAgent = storage.get("llmAgentId") || "1954810625930809344";
+      wrap.innerHTML = `
+        <div class="sr-row" style="margin-top:4px">
+          <label>Agent ID (智谱智能体)<input id="llm-agent-id" type="text" placeholder="1954810625930809344" value="${escapeHTML(currentAgent)}"></label>
+          <label>API URL<input id="llm-url" type="text" value="${escapeHTML(currentUrl)}"></label>
+        </div>
+        <label style="display:block;margin-top:6px">API Key / Token<input id="llm-key" type="text" value="${escapeHTML(currentKey)}"></label>
+        <p style="margin:6px 0 0 0;font-size:12px;color:#777">将选中文本解析为事件：使用 智谱 智能体接口 (app_id=Agent ID)。</p>
+      `;
+    } else {
+      wrap.innerHTML = `<p style="font-size:13px;color:#666">暂不支持该类型。</p>`;
+    }
+  }
+  renderLLMProviderConfig();
+  providerSelect.addEventListener("change", renderLLMProviderConfig);
+
   const last = storage.get("lastSync");
   document.getElementById("last-sync").textContent = last ? new Date(last).toLocaleString() : "n/a";
 
@@ -154,8 +184,16 @@ async function buildSettingsModal() {
     storage.set("autoSyncMinutes", Number(document.getElementById("auto-mins").value) || DEFAULTS.autoSyncMinutes);
     storage.set("dateWindowDays", Number(document.getElementById("win-days").value) || DEFAULTS.dateWindowDays);
     storage.set("enableNotifications", document.getElementById("enable-notif").checked);
-    storage.set("llmApiUrl", document.getElementById("llm-url").value.trim());
-    storage.set("llmApiKey", document.getElementById("llm-key").value.trim());
+    const prov = providerSelect.value;
+    storage.set("llmProvider", prov);
+    if (prov === "zhipu_agent") {
+      const agentId = (document.getElementById("llm-agent-id")?.value || "").trim();
+      const apiUrl = (document.getElementById("llm-url")?.value || "").trim();
+      const apiKey = (document.getElementById("llm-key")?.value || "").trim();
+      storage.set("llmAgentId", agentId);
+      storage.set("llmApiUrl", apiUrl);
+      storage.set("llmApiKey", apiKey);
+    }
     toggleSettingsModal(false);
     showToast("设置已保存");
   });
@@ -177,14 +215,13 @@ export function showTextInputModal({ title = "输入要解析的日程文本", i
   const backdrop = document.createElement("div");
   backdrop.className = "sr-modal-backdrop";
   backdrop.id = "sr-input-modal";
-  backdrop.addEventListener("click", (e) => { if (e.target === backdrop) backdrop.remove(); });
 
   const panel = document.createElement("div");
   panel.className = "sr-panel";
   panel.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
       <h2>${escapeHTML(title)}</h2>
-      <div><button id="sr-input-cancel" class="sr-btn ghost">取消</button></div>
+      <div><button id="sr-input-close" class="sr-btn ghost">关闭</button></div>
     </div>
     <div>
       <textarea id="sr-input-text" rows="8" style="width:100%;resize:vertical;padding:10px;border-radius:10px;border:1px solid #e6e9ef;" placeholder="${escapeHTML(placeholder)}"></textarea>
@@ -199,11 +236,13 @@ export function showTextInputModal({ title = "输入要解析的日程文本", i
   const ta = panel.querySelector("#sr-input-text");
   ta.value = initial || "";
 
-  panel.querySelector("#sr-input-cancel").addEventListener("click", () => backdrop.remove());
+  // 新关闭按钮
+  panel.querySelector("#sr-input-close").addEventListener("click", () => backdrop.remove());
+
   const submit = () => {
     const val = (ta.value || "").trim();
     if (!val) { showToast("请输入要解析的文本", "error"); return; }
-    try { onSubmit && onSubmit(val); } finally { backdrop.remove(); }
+    try { onSubmit && onSubmit(val); } finally { backdrop.remove(); } // 提交后仍自动关闭
   };
   panel.querySelector("#sr-input-submit").addEventListener("click", submit);
   ta.addEventListener("keydown", (e) => {

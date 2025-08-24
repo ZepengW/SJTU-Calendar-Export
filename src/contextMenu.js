@@ -1,57 +1,32 @@
 import { handleLLMParsingAndUpload } from "./llm.js";
 import { showTextInputModal } from "./ui.js";
 
-export function setupContextMenu() {
-  document.addEventListener("contextmenu", (e) => {
-    const sel = window.getSelection().toString().trim();
-
-    const existing = document.getElementById("sjtu-ctx-menu");
-    if (existing) existing.remove();
-
-    const menu = document.createElement("div");
-    Object.assign(menu, { id: "sjtu-ctx-menu" });
-    Object.assign(menu.style, {
-      position: "absolute",
-      left: `${e.pageX}px`,
-      top: `${e.pageY}px`,
-      zIndex: 2147483647,
-      background: "#fff",
-      border: "1px solid #e6e9ef",
-      padding: "6px",
-      borderRadius: "8px",
-      boxShadow: "0 12px 30px rgba(9,30,66,0.12)"
-    });
-
-    const btn = document.createElement("button");
-    btn.textContent = "日程解析并同步";
-    Object.assign(btn.style, {
-      padding: "8px 10px",
-      cursor: "pointer",
-      background: "#0b74de",
-      color: "#fff",
-      border: "none",
-      borderRadius: "6px",
-      whiteSpace: "nowrap"
-    });
-    btn.addEventListener("click", async (ev) => {
-      ev.stopPropagation(); ev.preventDefault();
-      menu.remove();
-      showTextInputModal({
-        title: "输入要解析的日程文本",
-        initial: sel || "",
-        onSubmit: async (text) => {
-          await handleLLMParsingAndUpload(text);
-        }
-      });
-    });
-
-    menu.appendChild(btn);
-    document.body.appendChild(menu);
-    e.preventDefault();
-
-    document.addEventListener("click", () => {
-      const m = document.getElementById("sjtu-ctx-menu");
-      if (m) m.remove();
-    }, { once: true });
+export function invokeParseModal(initialText = "") {
+  showTextInputModal({
+    title: "输入要解析的日程文本",
+    initial: initialText || "",
+    onSubmit: async (text) => {
+      await handleLLMParsingAndUpload(text);
+    }
   });
+}
+
+// 兼容旧接口（现在不再创建自定义右键菜单）
+export function setupContextMenu() {
+  // no-op: 原双菜单方案已移除
+}
+
+// 新增：注册到 Tampermonkey 菜单
+export function registerMenuIntegration() {
+  try {
+    if (typeof GM_registerMenuCommand === "function") {
+      GM_registerMenuCommand("SJTU Radicale: 解析当前选中文本", () => {
+        const sel = (window.getSelection()?.toString() || "").trim();
+        invokeParseModal(sel);
+      });
+      GM_registerMenuCommand("SJTU Radicale: 打开空白解析输入框", () => {
+        invokeParseModal("");
+      });
+    }
+  } catch {}
 }

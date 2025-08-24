@@ -15,11 +15,25 @@ export async function parseSelectedTextWithLLM(text) {
     throw new Error("未配置 LLM API Key");
   }
 
+  const provider = storage.get("llmProvider") || "zhipu_agent";
+  let agentId;
+  switch (provider) {
+    case "zhipu_agent":
+      agentId = storage.get("llmAgentId") || "1954810625930809344";
+      if (!agentId) {
+        showToast("未配置 Agent ID", "error");
+        throw new Error("未配置 Agent ID");
+      }
+      break;
+    default:
+      showToast("不支持的解析服务类型: " + provider, "error");
+      throw new Error("不支持的解析服务类型");
+  }
+
   const now = new Date();
   const todayDate = now.toISOString().split("T")[0];
   const currentTime = now.toTimeString().split(" ")[0];
 
-  const agentId = "1954810625930809344"; // Replace with your agent ID
   const headers = { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" };
   const body = JSON.stringify({
     app_id: agentId,

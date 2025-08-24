@@ -231,9 +231,15 @@
     </div>
     <hr style="border:none;border-top:1px solid #eef2ff;margin:12px 0">
     <h3 style="margin:0 0 6px 0">选中解析（右键） - 大模型解析</h3>
-    <p style="margin:0 0 8px 0;color:#666;font-size:13px">选中文本后可右键解析为日程。请配置 LLM API。</p>
-    <label style="display:block">LLM API URL<input id="llm-url" type="text" placeholder="https://open.bigmodel.cn/api/llm-application/open/v3/application/invoke"></label>
-    <label style="display:block;margin-top:6px">LLM API Key / Token<input id="llm-key" type="text"></label>
+    <p style="margin:0 0 8px 0;color:#666;font-size:13px">配置解析服务类型与其参数。</p>
+    <div class="sr-row">
+      <label>解析服务类型
+        <select id="llm-provider" style="padding:8px 10px;border-radius:8px;border:1px solid #e6e9ef;">
+          <option value="zhipu_agent">智谱智能体</option>
+        </select>
+      </label>
+    </div>
+    <div id="llm-provider-config"></div>
     <div class="sr-actions">
       <button id="save-settings" class="sr-btn primary">保存并关闭</button>
       <button id="sync-now" class="sr-btn">立即同步</button>
@@ -250,8 +256,32 @@
     document.getElementById("auto-mins").value = storage.get("autoSyncMinutes") || DEFAULTS.autoSyncMinutes;
     document.getElementById("win-days").value = storage.get("dateWindowDays") || DEFAULTS.dateWindowDays;
     document.getElementById("enable-notif").checked = !!storage.get("enableNotifications");
-    document.getElementById("llm-url").value = storage.get("llmApiUrl") || "";
-    document.getElementById("llm-key").value = storage.get("llmApiKey") || "";
+    const providerSelect = document.getElementById("llm-provider");
+    providerSelect.value = storage.get("llmProvider") || "zhipu_agent";
+
+    function renderLLMProviderConfig() {
+      const prov = providerSelect.value;
+      const wrap = document.getElementById("llm-provider-config");
+      if (!wrap) return;
+      if (prov === "zhipu_agent") {
+        const currentUrl = storage.get("llmApiUrl") || "https://open.bigmodel.cn/api/llm-application/open/v3/application/invoke";
+        const currentKey = storage.get("llmApiKey") || "";
+        const currentAgent = storage.get("llmAgentId") || "1954810625930809344";
+        wrap.innerHTML = `
+        <div class="sr-row" style="margin-top:4px">
+          <label>Agent ID (智谱智能体)<input id="llm-agent-id" type="text" placeholder="1954810625930809344" value="${escapeHTML(currentAgent)}"></label>
+          <label>API URL<input id="llm-url" type="text" value="${escapeHTML(currentUrl)}"></label>
+        </div>
+        <label style="display:block;margin-top:6px">API Key / Token<input id="llm-key" type="text" value="${escapeHTML(currentKey)}"></label>
+        <p style="margin:6px 0 0 0;font-size:12px;color:#777">将选中文本解析为事件：使用 智谱 智能体接口 (app_id=Agent ID)。</p>
+      `;
+      } else {
+        wrap.innerHTML = `<p style="font-size:13px;color:#666">暂不支持该类型。</p>`;
+      }
+    }
+    renderLLMProviderConfig();
+    providerSelect.addEventListener("change", renderLLMProviderConfig);
+
     const last = storage.get("lastSync");
     document.getElementById("last-sync").textContent = last ? new Date(last).toLocaleString() : "n/a";
 
@@ -263,8 +293,16 @@
       storage.set("autoSyncMinutes", Number(document.getElementById("auto-mins").value) || DEFAULTS.autoSyncMinutes);
       storage.set("dateWindowDays", Number(document.getElementById("win-days").value) || DEFAULTS.dateWindowDays);
       storage.set("enableNotifications", document.getElementById("enable-notif").checked);
-      storage.set("llmApiUrl", document.getElementById("llm-url").value.trim());
-      storage.set("llmApiKey", document.getElementById("llm-key").value.trim());
+      const prov = providerSelect.value;
+      storage.set("llmProvider", prov);
+      if (prov === "zhipu_agent") {
+        const agentId = (document.getElementById("llm-agent-id")?.value || "").trim();
+        const apiUrl = (document.getElementById("llm-url")?.value || "").trim();
+        const apiKey = (document.getElementById("llm-key")?.value || "").trim();
+        storage.set("llmAgentId", agentId);
+        storage.set("llmApiUrl", apiUrl);
+        storage.set("llmApiKey", apiKey);
+      }
       toggleSettingsModal(false);
       showToast("设置已保存");
     });
@@ -286,14 +324,13 @@
     const backdrop = document.createElement("div");
     backdrop.className = "sr-modal-backdrop";
     backdrop.id = "sr-input-modal";
-    backdrop.addEventListener("click", (e) => { if (e.target === backdrop) backdrop.remove(); });
 
     const panel = document.createElement("div");
     panel.className = "sr-panel";
     panel.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
       <h2>${escapeHTML(title)}</h2>
-      <div><button id="sr-input-cancel" class="sr-btn ghost">取消</button></div>
+      <div><button id="sr-input-close" class="sr-btn ghost">关闭</button></div>
     </div>
     <div>
       <textarea id="sr-input-text" rows="8" style="width:100%;resize:vertical;padding:10px;border-radius:10px;border:1px solid #e6e9ef;" placeholder="${escapeHTML(placeholder)}"></textarea>
@@ -308,11 +345,13 @@
     const ta = panel.querySelector("#sr-input-text");
     ta.value = initial || "";
 
-    panel.querySelector("#sr-input-cancel").addEventListener("click", () => backdrop.remove());
+    // 新关闭按钮
+    panel.querySelector("#sr-input-close").addEventListener("click", () => backdrop.remove());
+
     const submit = () => {
       const val = (ta.value || "").trim();
       if (!val) { showToast("请输入要解析的文本", "error"); return; }
-      try { onSubmit && onSubmit(val); } finally { backdrop.remove(); }
+      try { onSubmit && onSubmit(val); } finally { backdrop.remove(); } // 提交后仍自动关闭
     };
     panel.querySelector("#sr-input-submit").addEventListener("click", submit);
     ta.addEventListener("keydown", (e) => {
@@ -534,11 +573,25 @@
       throw new Error("未配置 LLM API Key");
     }
 
+    const provider = storage.get("llmProvider") || "zhipu_agent";
+    let agentId;
+    switch (provider) {
+      case "zhipu_agent":
+        agentId = storage.get("llmAgentId") || "1954810625930809344";
+        if (!agentId) {
+          showToast("未配置 Agent ID", "error");
+          throw new Error("未配置 Agent ID");
+        }
+        break;
+      default:
+        showToast("不支持的解析服务类型: " + provider, "error");
+        throw new Error("不支持的解析服务类型");
+    }
+
     const now = new Date();
     const todayDate = now.toISOString().split("T")[0];
     const currentTime = now.toTimeString().split(" ")[0];
 
-    const agentId = "1954810625930809344"; // Replace with your agent ID
     const headers = { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" };
     const body = JSON.stringify({
       app_id: agentId,
@@ -606,59 +659,34 @@
     }
   }
 
-  function setupContextMenu() {
-    document.addEventListener("contextmenu", (e) => {
-      const sel = window.getSelection().toString().trim();
-
-      const existing = document.getElementById("sjtu-ctx-menu");
-      if (existing) existing.remove();
-
-      const menu = document.createElement("div");
-      Object.assign(menu, { id: "sjtu-ctx-menu" });
-      Object.assign(menu.style, {
-        position: "absolute",
-        left: `${e.pageX}px`,
-        top: `${e.pageY}px`,
-        zIndex: 2147483647,
-        background: "#fff",
-        border: "1px solid #e6e9ef",
-        padding: "6px",
-        borderRadius: "8px",
-        boxShadow: "0 12px 30px rgba(9,30,66,0.12)"
-      });
-
-      const btn = document.createElement("button");
-      btn.textContent = "日程解析并同步";
-      Object.assign(btn.style, {
-        padding: "8px 10px",
-        cursor: "pointer",
-        background: "#0b74de",
-        color: "#fff",
-        border: "none",
-        borderRadius: "6px",
-        whiteSpace: "nowrap"
-      });
-      btn.addEventListener("click", async (ev) => {
-        ev.stopPropagation(); ev.preventDefault();
-        menu.remove();
-        showTextInputModal({
-          title: "输入要解析的日程文本",
-          initial: sel || "",
-          onSubmit: async (text) => {
-            await handleLLMParsingAndUpload(text);
-          }
-        });
-      });
-
-      menu.appendChild(btn);
-      document.body.appendChild(menu);
-      e.preventDefault();
-
-      document.addEventListener("click", () => {
-        const m = document.getElementById("sjtu-ctx-menu");
-        if (m) m.remove();
-      }, { once: true });
+  function invokeParseModal(initialText = "") {
+    showTextInputModal({
+      title: "输入要解析的日程文本",
+      initial: initialText || "",
+      onSubmit: async (text) => {
+        await handleLLMParsingAndUpload(text);
+      }
     });
+  }
+
+  // 兼容旧接口（现在不再创建自定义右键菜单）
+  function setupContextMenu() {
+    // no-op: 原双菜单方案已移除
+  }
+
+  // 新增：注册到 Tampermonkey 菜单
+  function registerMenuIntegration() {
+    try {
+      if (typeof GM_registerMenuCommand === "function") {
+        GM_registerMenuCommand("SJTU Radicale: 解析当前选中文本", () => {
+          const sel = (window.getSelection()?.toString() || "").trim();
+          invokeParseModal(sel);
+        });
+        GM_registerMenuCommand("SJTU Radicale: 打开空白解析输入框", () => {
+          invokeParseModal("");
+        });
+      }
+    } catch {}
   }
 
   async function tryAcquireAndRun() {
@@ -712,8 +740,40 @@
   onReady(() => {
     try {
       createUIElements();
-      setupContextMenu();
+      registerMenuIntegration();
       setupCrossTabTimer();
+
+      // Allow external trigger (extension/content-script) to open parse modal with current selection
+      window.addEventListener("message", (e) => {
+        try {
+          if (e?.data?.type === "SJTU_CAL_PARSE_SELECTED") {
+            const sel = (window.getSelection()?.toString() || "").trim();
+            invokeParseModal(sel);
+          }
+        } catch {}
+      });
+
+      // If running under an extension content script, support chrome.runtime messaging as well
+      try {
+        if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage) {
+          chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+            if (msg && msg.type === "SJTU_CAL_PARSE_SELECTED") {
+              const sel = (window.getSelection()?.toString() || "").trim();
+              invokeParseModal(sel);
+              sendResponse && sendResponse({ ok: true });
+            }
+          });
+        }
+      } catch {}
+
+      // 快捷键：Ctrl/Cmd + Shift + P 直接解析当前选择
+      window.addEventListener("keydown", (e) => {
+        const mod = navigator.platform.toUpperCase().includes("MAC") ? e.metaKey : e.ctrlKey;
+        if (mod && e.shiftKey && e.key.toLowerCase() === "p") {
+          const sel = (window.getSelection()?.toString() || "").trim();
+          invokeParseModal(sel);
+        }
+      });
 
       // Keyboard shortcut: Ctrl/Cmd + Shift + R
       window.addEventListener("keydown", (e) => {
